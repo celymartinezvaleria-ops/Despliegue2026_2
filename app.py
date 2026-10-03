@@ -6,68 +6,105 @@ import joblib
 st.title("Predicción de Aprobación de Curso")
 st.write("Esta aplicación procesa las variables de entrada y realiza una predicción utilizando un modelo de Bagging pre-entrenado.")
 
-# 1. Inputs del usuario
-st.header("Datos de Entrada")
-
-# Opciones para la variable Felder obtenidas de los datos reales o previstos
-opciones_felder = ['sensorial', 'activo', 'visual', 'equilibrio', 'secuencial', 'reflexivo', 'verbal', 'intuitivo']
-
-# Entradas del formulario
-felder_input = st.selectbox("Selecciona el estilo de aprendizaje (Felder):", opciones_felder)
-examen_input = st.number_input("Examen de Admisión:", min_value=0.0, max_value=5.0, value=3.83, step=0.01)
-
-# Crear un DataFrame temporal con los datos del usuario
-data_dict = {
-    'Felder': [felder_input],
-    'Examen_admisión': [examen_input]
-}
-df_input = pd.DataFrame(data_dict)
-
-if st.button("Realizar Predicción"):
+# 1. Cargar artefactos necesarios de forma segura
+@st.cache_resource
+def load_artifacts():
     try:
-        # Copia de trabajo
-        df_procesado = df_input.copy()
-        
-        # 2. Cargar y aplicar el transformador/columnas de One-Hot para la variable Felder
-        one_hot_transformer = joblib.load('one_hot_columns.joblib')
-        
-        if isinstance(one_hot_transformer, list):
-            si_columnas_one_hot = [col for col in one_hot_transformer if 'Felder_' in col]
-            for col_name in si_columnas_one_hot:
-                valor_esperado = col_name.replace('Felder_', '')
-                df_procesado[col_name] = (df_procesado['Felder'] == valor_esperado).astype(int)
-        else:
-            # Fallback en caso de que sea un transformador de sklearn u otro objeto
-            df_encoded = pd.get_dummies(df_procesado[['Felder']])
-            df_procesado = pd.concat([df_procesado, df_encoded], axis=1)
-            si_columnas_one_hot = [col for col in df_procesado.columns if 'Felder_' in col]
-            
-        # Eliminar la variable original Felder
-        df_procesado = df_procesado.drop(columns=['Felder'], errors='ignore')
-        
-        # Asegurar que existan todas las columnas que el modelo espera
-        if isinstance(one_hot_transformer, list):
-            for col in si_columnas_one_hot:
-                if col not in df_procesado.columns:
-                    df_procesado[col] = 0
-                    
-        # 3. Normalizar la variable Examen_admisión con 'min_max_scaler.joblib'
-        scaler = joblib.load('min_max_scaler.joblib')
-        df_procesado['Examen_admision_scaled'] = scaler.transform(df_procesado[['Examen_admisión']])
-        df_procesado = df_procesado.drop(columns=['Examen_admisión'], errors='ignore')
-        
-        # Reordenar las columnas conforme lo espera el modelo
-        columnas_ordenadas = si_columnas_one_hot + ['Examen_admision_scaled']
-        df_procesado = df_procesado[columnas_ordenadas]
-        
-        st.subheader("Datos Procesados para el Modelo")
-        st.dataframe(df_procesado)
-        
-        # 4. Predicción con 'bagging_model.joblib'
-        model = joblib.load('bagging_optimizado.joblib')
-        prediccion = model.predict(df_procesado)
-        
-        st.success(f"La predicción del modelo (Nota Final Estimada) es: {prediccion[0]:.4f}")
-        
+        columnas_one_hot = joblib.load('/content/one_hot_columns.joblib')
+        scaler = joblib.load('/content/min_max_scaler.joblib')
+        model = joblib.load('/content/bagging_optimizado.joblib')
+        return columnas_one_hot, scaler, model
     except Exception as e:
-        st.error(f"Ocurrió un error durante el procesamiento o la predicción: {e}")
+        st.error(f"Error al cargar los archivos .joblib: {e}")
+        return None, None, None
+
+columnas_one_hot, scaler, model = load_artifacts()
+
+if columnas_one_hot and scaler and model:
+    st.header("Datos de Entrada")
+    
+    # Opción para permitir que el usuario suba su propio archivo Excel de pruebas
+    uploaded_file = st.file_uploader("Sube un archivo de Excel (.xlsx) con datos de prueba (opcional)", type=["xlsx"])
+    
+    if uploaded_file is not None:
+        try:
+            # Leer el archivo Excel cargado
+            df_excel = pd.read_excel(uploaded_file)
+            st.subheader("Datos del Archivo Cargado")
+            st.dataframe(df_excel)
+            
+            if 'Felder' in df_excel.columns and 'Examen_admisión' in df_excel.columns:
+                # Copia de trabajo para procesamiento
+                df_procesado = df_excel.copy()
+                
+                # Aplicar codificación One-Hot manual
+                for col in columnas_one_hot:
+                    if col.startswith('Felder_'):
+                        categoria = col.replace('Felder_', '')
+                        df_procesado[col] = df_procesado['Felder'].apply(lambda x: 1.0 if x == categoria else 0.0)
+                
+                # Normalizar la variable Examen_admisión
+                df_procesado['Examen_admision_scaled'] = scaler.transform(df_procesado[['Examen_admisión']])
+                
+                # Reordenar las columnas conforme lo espera el modelo
+                columnas_finales = [col for col in columnas_one_hot if col in df_procesado.columns]
+                df_procesado_final = df_procesado[columnas_finales]
+                
+                # Realizar predicciones para todo el dataset
+                predicciones = model.predict(df_procesado_final)
+                
+                # Añadir predicciones al DataFrame original
+                df_excel['Nota_final_estimada'] = predicciones
+                df_excel['Prediccion_aprobo'] = df_excel['Nota_final_estimada'].apply(lambda x: 'si' if x >= 3.0 else 'no')
+                
+                st.subheader("Resultados de las Predicciones")
+                st.dataframe(df_excel)
+            else:
+                st.error("El archivo Excel debe contener las columnas 'Felder' y 'Examen_admisión'.")
+        except Exception as e:
+            st.error(f"Ocurrió un error al procesar el archivo: {e}")
+            
+    else:
+        st.info("No se ha subido ningún archivo. Utiliza el formulario manual a continuación:")
+        
+        # Opciones para la variable Felder obtenidas de los datos reales
+        categorias_felder = [col.replace('Felder_', '') for col in columnas_one_hot if col.startswith('Felder_')]
+        if not categorias_felder:
+            categorias_felder = ['sensorial', 'activo', 'visual', 'equilibrio', 'secuencial', 'reflexivo', 'verbal', 'intuitivo']
+            
+        # Entradas del formulario
+        felder_input = st.selectbox("Selecciona el estilo de aprendizaje (Felder):", options=categorias_felder)
+        examen_input = st.slider("Nota de Examen de Admisión:", min_value=0.0, max_value=5.0, value=3.83, step=0.01)
+        
+        if st.button("Realizar Predicción"):
+            try:
+                df_input = pd.DataFrame([{'Felder': felder_input, 'Examen_admisión': examen_input}])
+                df_procesado = df_input.copy()
+                
+                # Aplicar codificación One-Hot manual
+                for col in columnas_one_hot:
+                    if col.startswith('Felder_'):
+                        categoria = col.replace('Felder_', '')
+                        df_procesado[col] = 1.0 if felder_input == categoria else 0.0
+                
+                # Aplicar el Min-Max Scaler cargado
+                df_procesado['Examen_admision_scaled'] = scaler.transform(df_procesado[['Examen_admisión']])[0][0]
+                
+                # Seleccionar y ordenar las columnas según las que espera el modelo
+                columnas_finales = [col for col in columnas_one_hot if col in df_procesado.columns]
+                df_procesado_final = df_procesado[columnas_finales]
+                
+                # Realizar la predicción con el modelo
+                prediccion = model.predict(df_procesado_final)[0]
+                
+                st.success(f"### Nota Final Estimada: {prediccion:.3f}")
+                if prediccion >= 3.0:
+                    st.balloons()
+                    st.success("¡El modelo estima que el estudiante APROBARÁ el curso!")
+                else:
+                    st.warning("El modelo estima que el estudiante no alcanzará la nota de aprobación.")
+                    
+            except Exception as e:
+                st.error(f"Ocurrió un error durante el procesamiento o la predicción: {e}")
+else:
+    st.warning("Por favor, asegúrate de que los archivos 'one_hot_columns.joblib', 'min_max_scaler.joblib' y 'bagging_optimizado.joblib' se encuentren en la ruta /content/.")
