@@ -11,9 +11,9 @@ st.write("Esta aplicación procesa las variables de entrada y realiza prediccion
 @st.cache_resource
 def load_artifacts():
     try:
-        columnas_one_hot = joblib.load('/content/one_hot_columns.joblib')
-        scaler = joblib.load('/content/min_max_scaler.joblib')
-        model = joblib.load('/content/bagging_optimizado.joblib')
+        columnas_one_hot = joblib.load('one_hot_columns.joblib')
+        scaler = joblib.load('min_max_scaler.joblib')
+        model = joblib.load('bagging_optimizado.joblib')
         return columnas_one_hot, scaler, model
     except Exception as e:
         st.error(f"Error al cargar los archivos serializados (.joblib): {e}")
